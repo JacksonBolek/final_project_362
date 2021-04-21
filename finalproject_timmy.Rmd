@@ -1,0 +1,179 @@
+---
+title: "timmy_finalproject"
+author: "Timmy Miller"
+date: "4/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+library(magrittr)
+library(MLmetrics)
+library(fastDummies)
+library(gbm)
+```
+
+
+```{r Read notes on feature engineering1!}
+train<-read_csv("final_train.csv")
+
+train$date<-str_remove(train$date, "\\s.*")
+train$deposit<-ifelse(train$deposit=="yes", 1, 0)
+quantile<-train$balance %>% quantile() # can remove this is you don't want feature engineering!
+
+train$contact_duration<-log(train$contact_duration+1) # can remove this if you don't want feature engineering! 
+
+train_dummy<-dummy_cols(train, c("marital", "education", "default", "date", "contact_type", "prev_outcome", "loan"), remove_selected_columns = T, remove_first_dummy = T)
+
+set.seed(123)
+index<-createDataPartition(train$age, list=F, p=.9)
+train_dummy<-train_dummy[index,]
+test<-train_dummy[-index,]
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+#trying with logreg
+
+```{r}
+logreg<-train(data=train_dummy, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=10, verbose=T))
+
+
+pred_logreg<-predict(logreg, newdata=test, type="prob")
+
+MLmetrics::LogLoss(pred_logreg[,2], test$deposit)
+
+logreg_logs<-train(data=train_dummy_logs, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=10, verbose=T))
+
+
+pred_logreg_logs<-predict(logreg_logs, newdata=test, type="prob")
+
+MLmetrics::LogLoss(pred_logreg_logs[,2], test$deposit)
+
+```
+
+
+# tring with random forest
+
+```{r}
+set.seed(123)
+rf<-train(data=train_dummy, as.factor(deposit)~., method="rf", trControl=trainControl("cv", number=10, verbose=T), ntree=200, tuneGrid=expand.grid(mtry=8))
+
+rf$bestTune
+
+pred_rf<-predict(rf, newdata=test, type="prob")
+
+raw_rf<-predict(rf, newdata=test, type="raw")
+
+confusionMatrix(raw_rf, as.factor(test$deposit))
+
+MLmetrics::LogLoss(pred_rf[,2], test$deposit)
+
+pred_rf[,2]
+
+
+varImp(rf)
+
+trivial_model<-rep((train$deposit %>% mean()), times=length(test$deposit))
+
+
+
+MLmetrics::LogLoss(trivial_model, test$deposit)
+
+
+compete<-read.csv("final_compete.csv")
+
+compete$date<-str_remove(compete$date, "\\s.*")
+
+
+compete<-dummy_cols(compete, c("marital", "education", "default", "no", "date", "contact_type", "prev_outcome", "loan"), remove_selected_columns = T, remove_first_dummy = T)
+
+
+pred_compete<-predict(rf, newdata=compete, type="prob")
+
+compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_csv(file="proudpigeons_compete")
+
+```
+
+
+
+
+# trying with xgboost
+```{r}
+# make into factor just to see
+train_dummy$deposit<-factor(ifelse(train_dummy$deposit==1, "yes", "no"))
+xgb<-train(data=train_dummy, as.factor(deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), tuneGrid=expand.grid(eta=.1, max_depth=c(5,10,20), gamma=c(0, .1, .2), colsample_bytree=c(.6,.8,1), subsample=c(.6,.8,1), nrounds=100, min_child_weight=1), metric="logLoss")
+
+xgb$bestTune #nrounds=100, max_depth=10, eta=.1, gamma=.1, colsample_bytree=.6, subsample=1, min_child_weight=1
+
+pred_xgb<-predict(xgb, newdata=test, type="prob")
+
+
+MLmetrics::LogLoss(pred_xgb[,2], test$deposit)
+
+compete<-read.csv("final_compete.csv")
+
+compete$date<-str_remove(compete$date, "\\s.*")
+
+
+compete<-dummy_cols(compete, c("marital", "education", "default", "date", "contact_type", "prev_outcome", "loan"), remove_selected_columns = T, remove_first_dummy = T)
+
+
+pred_compete<-predict(xgb, newdata=compete, type="prob")
+
+compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_csv(file="proudpigeons_2")
+
+
+```
+
+
+
+# trying with feature engineering  (see the code starting at line 22)
+```{r}
+train_dummy$deposit<-factor(ifelse(train_dummy$deposit==1, "yes", "no"))
+xgb<-train(data=train_dummy, as.factor(deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), tuneGrid=expand.grid(eta=c(.1), max_depth=c(10), gamma=c(1, 1.1, 1.2, 1.3, 1.4, 1.5), colsample_bytree=c(.6,.8,1), subsample=c(.6,.8,1), nrounds=100, min_child_weight=1), metric="logLoss")
+
+pred_xgb<-predict(xgb, newdata=test, type="prob")
+
+
+MLmetrics::LogLoss(pred_xgb[,2], test$deposit)
+
+varImp(xgb)
+
+# Fitting nrounds = 100, max_depth = 10, eta = 0.1, gamma = 1, colsample_bytree = 0.6, min_child_weight = 1, subsample = 1 on full training set
+
+```
+
+
+# trying with the ranger package
+```{r}
+train_dummy$deposit<-factor(ifelse(train_dummy$deposit==1, "yes", "no"))
+ranger<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=10, repeats=10, verbose=T, classProbs=T, summaryFunction=mnLogLoss), tuneGrid=expand.grid(mtry=8, min.node.size=1, splitrule="gini"), metric="LogLoss")
+
+
+pred_ranger<-predict(ranger, newdata=test, type="prob")
+
+
+MLmetrics::LogLoss(pred_ranger[,2], test$deposit)
+
+
+
+```
+
