@@ -29,7 +29,7 @@ train$deposit %<>% as.factor()
 dummy<-dummy_cols(train, c("marital", "education", "default", "date", "contact_type", "prev_outcome", "loan"), remove_selected_columns = T)
 
 set.seed(123)
-index<-createDataPartition(train$age, list=F, p=.75)
+index<-createDataPartition(train$age, list=F, p=1)
 train_dummy<-dummy[index,]
 test<-dummy[-index,]
 
@@ -155,7 +155,9 @@ train_dummy<-dummy_cols(train, c("marital", "education", "default", "date", "con
 # trying with feature engineering  (see the code starting at line 22)
 ```{r}
 
-xgb<-train(data=train_dummy, as.factor(deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), tuneGrid=expand.grid(eta=c(.005), max_depth=c(10), gamma=c(.2), colsample_bytree=1, subsample=.9, nrounds=2000, min_child_weight=2), metric="logLoss")
+xgb<-train(data=train_dummy, as.factor(deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), tuneGrid=expand.grid(eta=.01, max_depth=6, gamma=0, colsample_bytree=.8, subsample=.8, nrounds=seq(10,1400,10), min_child_weight=4), metric="logLoss")
+
+xgb$results
 
 pred_xgb<-predict(xgb, newdata=test, type="prob")
 
@@ -187,13 +189,14 @@ compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_c
 
 # trying with the ranger package
 ```{r}
-ranger<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction=mnLogLoss), tuneGrid=expand.grid(mtry=7:8, min.node.size=c(1,2), splitrule="gini"), metric="logLoss")
+ranger<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=10, verbose=T, classProbs=T, summaryFunction=mnLogLoss), tuneGrid=expand.grid(mtry=6:9, min.node.size=c(1,2,3), splitrule="gini"), metric="logLoss")
 
+ranger$results %>% filter(logLoss==min(logLoss))
 
 pred_ranger<-predict(ranger, newdata=test, type="prob")
 
 
-MLmetrics::LogLoss(pred_ranger[,2], ifelse(test$deposit=="yes",1,0))
+# MLmetrics::LogLoss(pred_ranger[,2], ifelse(test$deposit=="yes",1,0))
 
 
 compete<-read.csv("final_compete.csv")
@@ -204,7 +207,7 @@ compete<-dummy_cols(compete, c("marital", "education", "default", "date", "conta
 
 pred_compete<-predict(ranger, newdata=compete, type="prob")
 
-compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_csv(file="proudpigeons_6")
+compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_csv(file="proudpigeons_7")
 
 ```
 
