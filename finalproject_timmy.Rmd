@@ -1,6 +1,6 @@
 ---
-title: "timmy_finalproject"
-author: "Timmy Miller"
+title: "proudpigeons_finalproject"
+author: "Jackson Bolek, Zeke Metz, and Timmy Miller"
 date: "4/12/2021"
 output: html_document
 ---
@@ -15,27 +15,34 @@ library(caret)
 library(magrittr)
 library(MLmetrics)
 library(fastDummies)
-library(gbm)
 ```
 
 
-```{r Read notes on feature engineering1!}
+```{r }
+# read in the data
 train<-read_csv("~/final_project_362/final_train.csv")
+
+# conver each date from Month/Day to Month only
 
 train$date<-str_remove(train$date, "\\s.*")
 
+# make the response variable a factor; leave all other categorical variables as characters for facet_wrap
+
 train$deposit %<>% as.factor() 
+
+# make dummy variables out of categorical variables
 
 dummy<-dummy_cols(train, c("marital", "education", "default", "date", "contact_type", "prev_outcome", "loan"), remove_selected_columns = T)
 
+# create a data partition for training and test sets; initially used p=.75 but wound up using the entire training set so that we could maximize model accuracy; this can be cut but I think it is a good feature to keep if you want to make a separate test set
 set.seed(123)
 index<-createDataPartition(train$age, list=F, p=1)
 train_dummy<-dummy[index,]
 test<-dummy[-index,]
 
-
+# get a glimpse at the distributions of the predictors 
 train %>%
-  keep(is.character) %>%                     # Keep only numeric columns
+  keep(is.character) %>%                     # Keep only character columns
   gather() %>%                             # Convert to key-value pairs
   ggplot(aes(value)) +                     # Plot the values
     facet_wrap(~ key, scales = "free", nrow=4) +   # In separate panels
@@ -49,7 +56,7 @@ train %>%
     facet_wrap(~ key, scales = "free", nrow=4) +   # In separate panels
     geom_density(color="blue", fill="blue")+labs(title="Continuous Predictors", x="Value", y="Density")+theme(plot.title = element_text(hjust = 0.5))
 
-
+# distribution of response
 train %>% select(deposit) %>% ggplot(aes(deposit))+geom_bar(fill="green")+labs(title="Response Variable", x="Deposit", y="Count")+theme(plot.title = element_text(hjust = 0.5))
 
 
@@ -60,9 +67,11 @@ train %>% select(deposit) %>% ggplot(aes(deposit))+geom_bar(fill="green")+labs(t
 
 # defining the trivial model
 ```{r}
-#Log Loss of trivial model is .52, given by Dr. Weber
+# calculate trivial model log loss; each probability is equal to the probability of "yes" instances in the training data; winds up being .52
+trivial_logloss<-MLmetrics::LogLoss(1-(train_dummy %>% filter(deposit=="no") %>% nrow()/nrow(train_dummy)), ifelse(train_dummy$deposit=="yes", 1,0))
 
-train_dummy %>% filter(deposit=="no") %>% nrow()/nrow(train_dummy) #accuracy of trivial model is .784
+# calculate the trivial model accuracy (no information rate); winds up being .78
+trivial_accuracy<-train_dummy %>% filter(deposit=="no") %>% nrow()/nrow(train_dummy) 
 
 
 ```
@@ -72,14 +81,17 @@ train_dummy %>% filter(deposit=="no") %>% nrow()/nrow(train_dummy) #accuracy of 
 
 
 
-#trying with logreg
+#developing each of the four models; for each model, we will optimize first for the log loss and then next for the accuracy
 
-```{r}
-logreg<-train(data=train_dummy, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=10, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), metric="logLoss")
+```{r logistic regression}
+set.seed(123)
+#train the model with optimization for Log Loss
+logreg<-train(data=train_dummy, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), metric="logLoss")
 
 logreg$results
 
-logreg_accuracy<-train(data=train_dummy, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=10, verbose=T))
+#train the model with optimization for Accuracy
+logreg_acc<-train(data=train_dummy, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=5, verbose=T))
 
 logreg_accuracy$results
 
@@ -88,23 +100,14 @@ logreg_accuracy$results
 ```
 
 
-# tring with random forest
 
-
-
-
-
-
-
-
-# trying with xgboost
-```{r}
-
+```{r extreme gradient boosting}
+set.seed(123)
 xgb<-train(data=train_dummy, as.factor(deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), tuneGrid=expand.grid(eta=.01, max_depth=6, gamma=0, colsample_bytree=.8, subsample=.8, nrounds=seq(10,1400,10), min_child_weight=4), metric="logLoss")
 
 xgb$results
 
-varImp(xgb)
+varImp(xgb) # optional variable importance analysis 
 
 xgb_acc<-train(data=train_dummy, as.factor(deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T), tuneGrid=expand.grid(eta=.01, max_depth=6, gamma=0, colsample_bytree=.8, subsample=.8, nrounds=seq(10,1400,10), min_child_weight=4))
 
@@ -114,7 +117,7 @@ varImp(xgb_acc)
 
 
 
-
+# example of a given submission for the competition using the xgb model
 compete<-read.csv("final_compete.csv")
 
 compete$date<-str_remove(compete$date, "\\s.*")
@@ -132,17 +135,20 @@ compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_c
 ```
 
 
-# trying with the ranger package
-```{r}
-ranger<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction=mnLogLoss), tuneGrid=expand.grid(mtry=9, min.node.size=c(1), splitrule="gini"), metric="logLoss")
+
+```{r Ranger random forest}
+set.seed(123)
+ranger<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction=mnLogLoss), tuneGrid=expand.grid(mtry=6:12, min.node.size=c(1,2,3), splitrule="gini"), metric="logLoss")
 
 ranger$results
 
-ranger_acc<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=5, verbose=T), tuneGrid=expand.grid(mtry=9, min.node.size=c(1), splitrule="gini"))
+ranger_acc<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=5, verbose=T), tuneGrid=expand.grid(mtry=6:12, min.node.size=c(1,2,3), splitrule="gini"))
 
 ranger_acc$results
 
 pred_ranger<-predict(ranger, newdata=test, type="prob")
+
+# create a nice visualization
 
 ggplot(ranger$results, aes(x=mtry, y=logLoss, color=as.factor(min.node.size)))+geom_line()+labs(title="Tuning Hyperparameters for the Random Forest Model\n (using the Ranger package with 5-fold CV)", x="Number of Predictors Available at Each Node", color="Minimum Node Size", y="Log Loss")+theme(plot.title = element_text(hjust = 0.5))
 
@@ -166,7 +172,8 @@ compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_c
 
 
 
-```{r}
+```{r penalized LDA}
+set.seed(123)
 plda<-train(data=train_dummy, deposit~., method="pda", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction = mnLogLoss), metric="logLoss", tuneGrid=expand.grid(lambda=seq(0, 500, 10)))
 
 plda$results
@@ -175,9 +182,23 @@ plda_acc<-train(data=train_dummy, deposit~., method="pda", trControl=trainContro
 
 plda_acc$results
 
-ggplot(plda$results, aes(lambda, logLoss))+geom_line(color="pink")
+
+
+```
 
 
 
+```{r model analysis}
+#create vector of all models
+Model<-c("Trivial", "Ranger Random Forest", "Extreme Gradient Boosting", "Penalized LDA", "Logistic Regression")
+
+# get the log loss scores for each model
+LogLoss<-c(trivial_logloss, ranger$results %>% select(logLoss) %>% min(), xgb$results %>% select(logLoss) %>% min(), plda$results %>% select(logLoss) %>% min(na.rm=T), logreg$results %>% select(logLoss) %>% min())
+
+# get accuracy for each model
+Accuracy<-c(trivial_accuracy, ranger_acc$results %>% select(Accuracy) %>% min(), xgb_acc$results %>% select(Accuracy) %>% min(), plda_acc$results %>% select(Accuracy) %>% min(na.rm=T), logreg_acc$results %>% select(Accuracy) %>% min() )
+
+# compile this into a data frame
+data.frame(Model, LogLoss, Accuracy)
 ```
 
