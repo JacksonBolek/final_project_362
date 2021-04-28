@@ -17,7 +17,7 @@ library(MLmetrics)
 library(fastDummies)
 ```
 
-# Loading and processing the data
+# Section 1: Loading and processing the data
 ```{r }
 # read in the data
 train<-read_csv("~/final_project_362/final_train.csv")
@@ -35,9 +35,9 @@ train$Deposit %<>% as.factor()
 
 dummy<-dummy_cols(train, c("Marital Status", "Education", "Default", "Month", "Contact Type", "Previous Outcome", "Loan"), remove_selected_columns = T)
 
-# create a data partition for training and test sets; initially used p=.75 but wound up using the entire training set so that we could maximize model accuracy; this can be cut but we think it is a good feature to keep if you want to make a separate test set
+# create a data partition for training and test sets; use 75% of the data for training and 25% for testing
 set.seed(123)
-index<-createDataPartition(train$Age, list=F, p=1)
+index<-createDataPartition(train$Age, list=F, p=.75)
 train_dummy<-dummy[index,]
 test<-dummy[-index,]
 
@@ -64,14 +64,14 @@ train %>% select(Deposit) %>% ggplot(aes(Deposit))+geom_bar(fill="green")+labs(t
 ```
 
 
-
+# Section 2: Building the Models
 
 # defining the trivial model
 ```{r}
-# calculate trivial model log loss; each probability is equal to the probability of "yes" instances in the training data; winds up being .52
+# calculate trivial model log loss; each probability is equal to the probability of "yes" instances in the training data; winds up being about .52
 trivial_logloss<-MLmetrics::LogLoss(1-(train_dummy %>% filter(Deposit=="no") %>% nrow()/nrow(train_dummy)), ifelse(train_dummy$Deposit=="yes", 1,0))
 
-# calculate the trivial model accuracy (no information rate); winds up being .78
+# calculate the trivial model accuracy (no information rate); winds up being about .78
 trivial_accuracy<-train_dummy %>% filter(Deposit=="no") %>% nrow()/nrow(train_dummy) 
 
 
@@ -79,19 +79,15 @@ trivial_accuracy<-train_dummy %>% filter(Deposit=="no") %>% nrow()/nrow(train_du
 
 
 
-#Building the models and Testing the models; for each model, we will optimize first for the log loss and then next for the accuracy
+#Building the non-trivial models; we will train with 5-fold cross validation and optimize for log loss since log loss is our competition metric
 
 ```{r logistic regression}
+# no tuning of hyperparameters necessary for logistic regression
 set.seed(123)
-#train the model with optimization for Log Loss
+
 logreg<-train(data=train_dummy, as.factor(Deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), metric="logLoss")
 
-logreg$results # show the cross validated testing estimates for the log loss
 
-#train the model with optimization for Accuracy
-logreg_acc<-train(data=train_dummy, as.factor(Deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=5, verbose=T))
-
-logreg_accuracy$results # show the cross validated testing estimates for the accuracy
 
 
 
@@ -100,18 +96,16 @@ logreg_accuracy$results # show the cross validated testing estimates for the acc
 
 
 ```{r extreme gradient boosting}
+
+# extreme gradient boosting tunes seven hyperparameters; here we only show the final model, but the hyperparameter tuning was iterative, beginning with eta (learning rate) and nrounds. Then, we moved on to the minimum child weight (minimum number of observations at each terminal node) and then maximum depth of the tree, followed by subsample and colsample_bytree, which provide random samples of the overall training data and the columns, respectively. We then moved on to the penalty term gamma, which wound up being 0. After all of this, we did a final retuning of the eta and nrounds to make sure we were not over or underfitting. 
 set.seed(123)
 xgb<-train(data=train_dummy, as.factor(Deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), tuneGrid=expand.grid(eta=.01, max_depth=6, gamma=0, colsample_bytree=.8, subsample=.8, nrounds=seq(10,1400,10), min_child_weight=4), metric="logLoss")
 
-xgb$results
+
 
 varImp(xgb) # optional variable importance analysis 
 
-xgb_acc<-train(data=train_dummy, as.factor(Deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T), tuneGrid=expand.grid(eta=.01, max_depth=6, gamma=0, colsample_bytree=.8, subsample=.8, nrounds=seq(10,1400,10), min_child_weight=4))
 
-xgb_acc$results
-
-varImp(xgb_acc)
 
 
 
@@ -120,20 +114,14 @@ varImp(xgb_acc)
 
 
 ```{r Ranger random forest}
+#hyperparamter tuning includes the number of predictors available at each node (mtry) and the minimum node size; the best model had mtry=9 and min.node.size=1
 set.seed(123)
 ranger<-train(data=train_dummy, as.factor(Deposit)~., method="ranger", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction=mnLogLoss), tuneGrid=expand.grid(mtry=6:12, min.node.size=c(1,2,3), splitrule="gini"), metric="logLoss")
 
-ranger$results
 
-ranger_acc<-train(data=train_dummy, as.factor(Deposit)~., method="ranger", trControl=trainControl(method="cv", number=5, verbose=T), tuneGrid=expand.grid(mtry=6:12, min.node.size=c(1,2,3), splitrule="gini"))
+# create a nice visualization of the hyperparameter tuning for the executive report
 
-ranger_acc$results
-
-pred_ranger<-predict(ranger, newdata=test, type="prob")
-
-# create a nice visualization for the executive report
-
-ggplot(ranger$results, aes(x=mtry, y=logLoss, color=as.factor(min.node.size)))+geom_line()+labs(title="Tuning Hyperparameters for the Random Forest Model\n (using the Ranger package with 5-fold CV)", x="Number of Predictors Available at Each Node", color="Minimum Node Size", y="Log Loss")+theme(plot.title = element_text(hjust = 0.5))
+ggplot(ranger$results, aes(x=mtry, y=logLoss, color=as.factor(min.node.size)))+geom_line()+labs(title="Tuning Hyperparameters for the Ranger Random Forest Model\n (tuned using the Caret package with 5-fold CV)", x="Number of Predictors Available at Each Node", color="Minimum Node Size", y="Log Loss")+theme(plot.title = element_text(hjust = 0.5))
 
 
 
@@ -142,50 +130,74 @@ ggplot(ranger$results, aes(x=mtry, y=logLoss, color=as.factor(min.node.size)))+g
 
 
 ```{r penalized LDA}
+# here we only tune the penalty term gamma
 set.seed(123)
 plda<-train(data=train_dummy, Deposit~., method="pda", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction = mnLogLoss), metric="logLoss", tuneGrid=expand.grid(lambda=seq(0, 500, 10)))
 
-plda$results
 
-plda_acc<-train(data=train_dummy, Deposit~., method="pda", trControl=trainControl(method="cv", number=5, verbose=T), tuneGrid=expand.grid(lambda=seq(0, 500, 10)))
-
-plda_acc$results
 
 
 
 ```
 
-# Deploying the Model
+# Section 3: Testing the Model and Results
+
+```{r}
+Model<-c(c("Trivial", "Ranger Random Forest", "Extreme Gradient Boosting", "Penalized LDA", "Logistic Regression")) #model names
+Model_object<-list(ranger, xgb, plda, logreg) # model objects to be used in the loop
+Accuracy<-vector() 
+Sensitivity<-vector()
+Specificity<-vector()
+LogLoss<-vector()
+# use this loop to create a data frame of accuracy, sensitivity, specificity, and log loss for each of the four models we tested, ass well as the trivial model; the first row of the data frame will be the trivial model's statistics. we cannot include the trivial model in the loop because we cannot use the predict() function on a naive model, so instead we manually define the first row and then loop the 2nd through 5th rows (2nd through 5th rows contain the four models that we built)
+for (i in 1+seq_along(list(logreg, xgb, ranger, plda))){
+  
+  Accuracy[1]<-confusionMatrix(factor(rep("no", times=nrow(test)), levels=c("no", "yes")), test$Deposit, positive="yes")$overall[1]
+  
+  Sensitivity[1]<-confusionMatrix(factor(rep("no", times=nrow(test)), levels=c("no", "yes")), test$Deposit, positive="yes")$byClass[1]
+  
+  Specificity[1]<-confusionMatrix(factor(rep("no", times=nrow(test)), levels=c("no", "yes")), test$Deposit, positive="yes")$byClass[2]
+  
+  LogLoss[1]<-MLmetrics::LogLoss((train_dummy %>% filter(Deposit=="yes") %>% nrow()/nrow(train_dummy)), ifelse(train_dummy$Deposit=="yes", 1,0))
+  
+  Accuracy[i]<-confusionMatrix(predict(Model_object[[i-1]], newdata=test, type="raw"), test$Deposit, positive="yes")$overall[1]
+  
+  Sensitivity[i]<-confusionMatrix(predict(Model_object[[i-1]], newdata=test, type="raw"), test$Deposit, positive="yes")$byClass[1]
+  
+  Specificity[i]<-confusionMatrix(predict(Model_object[[i-1]], newdata=test, type="raw"), test$Deposit, positive="yes")$byClass[2]
+  
+  LogLoss[i]<-LogLoss((predict(Model_object[[i-1]], newdata=test, type="prob")[,2]), ifelse(test$Deposit=="yes",1,0))
+  
+  
+}
+data.frame(Model, Accuracy, Sensitivity, Specificity, LogLoss) # build the data frame
+
+
+```
+
+
+# Section 4: Deployment
 
 ```{r}
 # example of a submission for the competition; follows the same process as reading in the training data, except there is no response to convert to a factor
-compete<-read.csv("final_compete.csv")
+compete<-read.csv("final_compete.csv") %>% select(-"id")
 
-compete$date<-str_remove(compete$date, "\\s.*")
-compete<-dummy_cols(compete, c("marital", "education", "default", "date", "contact_type", "prev_outcome", "loan"), remove_selected_columns = T)
+colnames(compete)<-c("Age", "Marital Status", "Education", "Default", "Loan", "Balance", "Month", "Contact Type", "Contact Duration", "Number of Contacts: Current Campaign", "Number of Days Since Contact from Previous Campaign", "Number of Contacts Before this Campaign", "Previous Outcome")
+
+compete$Month<-str_remove(compete$Month, "\\s.*")
+
+
+compete<-dummy_cols(compete, c("Marital Status", "Education", "Default", "Month", "Contact Type", "Previous Outcome", "Loan"), remove_selected_columns = T)
+
 
 
 pred_compete<-predict(ranger, newdata=compete, type="prob")
 
 # format properly for the competition
 
-compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_csv(file="proudpigeons_7")
+compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_csv(file="proudpigeons_7") #this model had a log loss of .262
 ```
 
 
-# Creating a Table for the Executive Report
 
-```{r model analysis}
-#create vector of all models
-Model<-c("Trivial", "Ranger Random Forest", "Extreme Gradient Boosting", "Penalized LDA", "Logistic Regression")
-
-# get the log loss scores for each model
-LogLoss<-c(trivial_logloss, ranger$results %>% select(logLoss) %>% min(), xgb$results %>% select(logLoss) %>% min(), plda$results %>% select(logLoss) %>% min(na.rm=T), logreg$results %>% select(logLoss) %>% min())
-
-# get accuracy for each model
-Accuracy<-c(trivial_accuracy, ranger_acc$results %>% select(Accuracy) %>% min(), xgb_acc$results %>% select(Accuracy) %>% min(), plda_acc$results %>% select(Accuracy) %>% min(na.rm=T), logreg_acc$results %>% select(Accuracy) %>% min() )
-
-# compile this into a data frame
-data.frame(Model, LogLoss, Accuracy)
-```
 
