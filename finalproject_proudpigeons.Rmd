@@ -15,6 +15,7 @@ library(caret)
 library(magrittr)
 library(MLmetrics)
 library(fastDummies)
+library(DT)
 ```
 
 # Section 1: Loading and processing the data
@@ -102,8 +103,10 @@ set.seed(123)
 xgb<-train(data=train_dummy, as.factor(Deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), tuneGrid=expand.grid(eta=.01, max_depth=6, gamma=0, colsample_bytree=.8, subsample=.8, nrounds=seq(10,1400,10), min_child_weight=4), metric="logLoss")
 
 
-
-varImp(xgb) # optional variable importance analysis 
+# Create presentable data table for variable importance
+varImp(xgb)$importance  %>%
+  datatable() %>%
+  formatRound(columns=c("Overall"), digits=3)
 
 
 
@@ -170,7 +173,13 @@ for (i in 1+seq_along(list(logreg, xgb, ranger, plda))){
   
   
 }
-data.frame(Model, Accuracy, Sensitivity, Specificity, LogLoss) # build the data frame
+# Create data frame with meanigful statistics, use data table to make it presentable
+data.frame(Model, Accuracy, Sensitivity, Specificity, LogLoss) %>%
+  datatable() %>%
+  formatRound(columns=c("Accuracy", "Sensitivity", "Specificity", "LogLoss"), digits=3)
+
+
+
 
 
 ```
