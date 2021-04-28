@@ -20,7 +20,7 @@ library(gbm)
 
 
 ```{r Read notes on feature engineering1!}
-train<-read_csv("final_train.csv")
+train<-read_csv("~/final_project_362/final_train.csv")
 
 train$date<-str_remove(train$date, "\\s.*")
 
@@ -34,6 +34,23 @@ train_dummy<-dummy[index,]
 test<-dummy[-index,]
 
 
+train %>%
+  keep(is.character) %>%                     # Keep only numeric columns
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free", nrow=4) +   # In separate panels
+    geom_bar(fill="red")+labs(title="Categorical Predictors", x="Value", y="Count")+theme(plot.title = element_text(hjust = 0.5))
+
+
+train %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free", nrow=4) +   # In separate panels
+    geom_density(color="blue", fill="blue")+labs(title="Continuous Predictors", x="Value", y="Density")+theme(plot.title = element_text(hjust = 0.5))
+
+
+train %>% select(deposit) %>% ggplot(aes(deposit))+geom_bar(fill="green")+labs(title="Response Variable", x="Deposit", y="Count")+theme(plot.title = element_text(hjust = 0.5))
 
 
 ```
@@ -41,6 +58,14 @@ test<-dummy[-index,]
 
 
 
+# defining the trivial model
+```{r}
+#Log Loss of trivial model is .52, given by Dr. Weber
+
+train_dummy %>% filter(deposit=="no") %>% nrow()/nrow(train_dummy) #accuracy of trivial model is .784
+
+
+```
 
 
 
@@ -50,124 +75,44 @@ test<-dummy[-index,]
 #trying with logreg
 
 ```{r}
-logreg<-train(data=train_dummy, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=10, verbose=T))
+logreg<-train(data=train_dummy, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=10, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), metric="logLoss")
+
+logreg$results
+
+logreg_accuracy<-train(data=train_dummy, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=10, verbose=T))
+
+logreg_accuracy$results
 
 
-pred_logreg<-predict(logreg, newdata=test, type="prob")
-
-MLmetrics::LogLoss(pred_logreg[,2], test$deposit)
-
-logreg_logs<-train(data=train_dummy_logs, as.factor(deposit)~., method="glm", family="binomial", trControl=trainControl("cv", number=10, verbose=T))
-
-
-pred_logreg_logs<-predict(logreg_logs, newdata=test, type="prob")
-
-MLmetrics::LogLoss(pred_logreg_logs[,2], test$deposit)
 
 ```
 
 
 # tring with random forest
 
-```{r}
-set.seed(123)
-rf<-train(data=train_dummy, as.factor(deposit)~., method="rf", trControl=trainControl("cv", number=10, verbose=T), ntree=200, tuneGrid=expand.grid(mtry=8))
-
-rf$bestTune
-
-pred_rf<-predict(rf, newdata=test, type="prob")
-
-raw_rf<-predict(rf, newdata=test, type="raw")
-
-confusionMatrix(raw_rf, as.factor(test$deposit))
-
-MLmetrics::LogLoss(pred_rf[,2], test$deposit)
-
-pred_rf[,2]
-
-
-varImp(rf)
-
-trivial_model<-rep((train$deposit %>% mean()), times=length(test$deposit))
 
 
 
-MLmetrics::LogLoss(trivial_model, test$deposit)
-
-
-compete<-read.csv("final_compete.csv")
-
-compete$date<-str_remove(compete$date, "\\s.*")
-
-
-compete<-dummy_cols(compete, c("marital", "education", "default", "no", "date", "contact_type", "prev_outcome", "loan"), remove_selected_columns = T, remove_first_dummy = T)
-
-
-pred_compete<-predict(rf, newdata=compete, type="prob")
-
-compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_csv(file="proudpigeons_compete")
-
-```
 
 
 
 
 # trying with xgboost
 ```{r}
-# make into factor just to see
-train_dummy$deposit<-factor(ifelse(train_dummy$deposit==1, "yes", "no"))
-xgb<-train(data=train_dummy, as.factor(deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), tuneGrid=expand.grid(eta=.1, max_depth=seq(5,15, 2), gamma=seq(0.05, .15, .02), colsample_bytree=.6, subsample=1, nrounds=100, min_child_weight=c(1:3)), metric="logLoss")
-
-xgb$bestTune #nrounds=100, max_depth=10, eta=.1, gamma=.1, colsample_bytree=.6, subsample=1, min_child_weight=1
-
-pred_xgb<-predict(xgb, newdata=test, type="prob")
-
-
-MLmetrics::LogLoss(pred_xgb[,2], test$deposit)
-
-
-```
-
-```{r}
-
-compete<-read.csv("final_compete.csv")
-
-compete$date<-str_remove(compete$date, "\\s.*")
-compete<-dummy_cols(compete, c("marital", "education", "default", "date", "contact_type", "prev_outcome", "loan"), remove_selected_columns = T, remove_first_dummy = T)
-
-
-pred_compete<-predict(xgb, newdata=compete, type="prob")
-
-compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_csv(file="proudpigeons_2")
-
-
-train<-read_csv("final_train.csv")
-
-train$date<-str_remove(train$date, "\\s.*")
-train$deposit %<>% as.factor() 
-
-train_dummy<-dummy_cols(train, c("marital", "education", "default", "date", "contact_type", "prev_outcome", "loan"), remove_selected_columns = T, remove_first_dummy = T)
-
-```
-
-
-
-# trying with feature engineering  (see the code starting at line 22)
-```{r}
 
 xgb<-train(data=train_dummy, as.factor(deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=TRUE, summaryFunction=mnLogLoss), tuneGrid=expand.grid(eta=.01, max_depth=6, gamma=0, colsample_bytree=.8, subsample=.8, nrounds=seq(10,1400,10), min_child_weight=4), metric="logLoss")
 
 xgb$results
 
-pred_xgb<-predict(xgb, newdata=test, type="prob")
-
-
-MLmetrics::LogLoss(pred_xgb[,2], ifelse(test$deposit=="yes", 1, 0))
-
 varImp(xgb)
 
+xgb_acc<-train(data=train_dummy, as.factor(deposit)~., method="xgbTree", trControl=trainControl(method="cv", number=5, verbose=T), tuneGrid=expand.grid(eta=.01, max_depth=6, gamma=0, colsample_bytree=.8, subsample=.8, nrounds=seq(10,1400,10), min_child_weight=4))
 
-confusionMatrix(predict(xgb, newdata=test, type="raw"), test$deposit)
+xgb_acc$results
+
+varImp(xgb_acc)
+
+
 
 
 compete<-read.csv("final_compete.csv")
@@ -182,21 +127,29 @@ compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_c
 
 
 
-# Fitting nrounds = 100, max_depth = 10, eta = 0.1, gamma = 1, colsample_bytree = 0.6, min_child_weight = 1, subsample = 1 on full training set
+
 
 ```
 
 
 # trying with the ranger package
 ```{r}
-ranger<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=10, verbose=T, classProbs=T, summaryFunction=mnLogLoss), tuneGrid=expand.grid(mtry=6:9, min.node.size=c(1,2,3), splitrule="gini"), metric="logLoss")
+ranger<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction=mnLogLoss), tuneGrid=expand.grid(mtry=9, min.node.size=c(1), splitrule="gini"), metric="logLoss")
 
-ranger$results %>% filter(logLoss==min(logLoss))
+ranger$results
+
+ranger_acc<-train(data=train_dummy, as.factor(deposit)~., method="ranger", trControl=trainControl(method="cv", number=5, verbose=T), tuneGrid=expand.grid(mtry=9, min.node.size=c(1), splitrule="gini"))
+
+ranger_acc$results
 
 pred_ranger<-predict(ranger, newdata=test, type="prob")
 
+ggplot(ranger$results, aes(x=mtry, y=logLoss, color=as.factor(min.node.size)))+geom_line()+labs(title="Tuning Hyperparameters for the Random Forest Model\n (using the Ranger package with 5-fold CV)", x="Number of Predictors Available at Each Node", color="Minimum Node Size", y="Log Loss")+theme(plot.title = element_text(hjust = 0.5))
 
-# MLmetrics::LogLoss(pred_ranger[,2], ifelse(test$deposit=="yes",1,0))
+
+
+
+
 
 
 compete<-read.csv("final_compete.csv")
@@ -214,22 +167,17 @@ compete.final<-data.frame(id=1:nrow(compete), prob=pred_compete[,2]) %>% write_c
 
 
 ```{r}
-plda<-train(data=train_dummy, deposit~., method="pda", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction = mnLogLoss), metric="logLoss", tuneGrid=expand.grid(lambda=seq(200, 300, 10)))
+plda<-train(data=train_dummy, deposit~., method="pda", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction = mnLogLoss), metric="logLoss", tuneGrid=expand.grid(lambda=seq(0, 500, 10)))
 
-pred_plda<-predict(plda, newdata=test, type="prob")
+plda$results
+
+plda_acc<-train(data=train_dummy, deposit~., method="pda", trControl=trainControl(method="cv", number=5, verbose=T), tuneGrid=expand.grid(lambda=seq(0, 500, 10)))
+
+plda_acc$results
+
+ggplot(plda$results, aes(lambda, logLoss))+geom_line(color="pink")
 
 
-MLmetrics::LogLoss(pred_plda[,2], ifelse(test$deposit=="yes", 1, 0))
 
 ```
 
-```{r}
-qrf<-train(data=train_dummy, deposit~., method="ORFlog", trControl=trainControl(method="cv", number=5, verbose=T, classProbs=T, summaryFunction = mnLogLoss), metric="logLoss", tuneControl=expand.grid(mtry=1:10))
-
-pred_qrf<-predict(qrf, newdata=test, type="prob")
-
-
-
-MLmetrics::LogLoss(pred_qrf[,2], ifelse(test$deposit=="yes", 1, 0))
-
-```
